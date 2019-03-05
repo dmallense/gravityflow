@@ -167,6 +167,7 @@ if ( class_exists( 'GFForms' ) ) {
 			add_filter( 'gform_export_form', array( $this, 'filter_gform_export_form' ) );
 			add_action( 'gform_forms_post_import', array( $this, 'action_gform_forms_post_import' ) );
 			parent::pre_init();
+			add_action( 'gform_post_add_entry', array( $this, 'action_gform_post_add_entry' ), 10, 2 );
 			add_filter( 'cron_schedules', array( $this, 'filter_cron_schedule' ) );
 			if ( ! wp_next_scheduled( 'gravityflow_cron' ) ) {
 				wp_schedule_event( time(), 'fifteen_minutes', 'gravityflow_cron' );
@@ -199,7 +200,6 @@ if ( class_exists( 'GFForms' ) ) {
 			add_action( 'gform_entry_created', array( $this, 'action_entry_created' ), 8, 2 );
 			add_action( 'gform_register_init_scripts', array( $this, 'filter_gform_register_init_scripts' ), 10, 3 );
 			add_action( 'wp_login', array( $this, 'filter_wp_login' ), 10, 2 );
-			add_action( 'gform_post_add_entry', array( $this, 'action_gform_post_add_entry' ), 10, 2 );
 
 			if ( $this->is_gravityforms_supported( '2.3.4.2' ) ) {
 				add_filter( 'gform_entry_pre_handle_confirmation', array( $this, 'after_submission' ), 9, 2 );
@@ -339,6 +339,10 @@ if ( class_exists( 'GFForms' ) ) {
 
 				if ( version_compare( $previous_version, '2.4.0-dev', '<' ) ) {
 					$this->upgrade_240();
+				}
+
+				if ( version_compare( $previous_version, '2.5', '<' ) ) {
+					$this->upgrade_250();
 				}
 			}
 
@@ -501,6 +505,8 @@ PRIMARY KEY  (id)
 
 		/**
 		 * Migrate the Gravity PDF Select field to a Checkbox field
+		 *
+		 * @since 2.4
 		 */
 		public function upgrade_240() {
 			$steps = $this->get_steps();
@@ -528,6 +534,19 @@ PRIMARY KEY  (id)
 					$this->save_feed_settings( $step->get_id(), $step->get_form_id(), $feed_meta );
 				}
 			}
+		}
+
+		/**
+		 * Turn on the security setting which allows shortcodes to override permissions.
+		 *
+		 * @since 2.5
+		 */
+		public function upgrade_250() {
+			$settings = $this->get_app_settings();
+
+			$settings['allow_display_all_attribute'] = true;
+			$settings['allow_allow_anonymous_attribute'] = true;
+			$this->update_app_settings( $settings );
 		}
 
 		/**
@@ -654,15 +673,6 @@ PRIMARY KEY  (id)
 					'deps'    => array( 'jquery', 'gform_datepicker_init' ),
 					'version' => $this->_version,
 					'enqueue' => array(
-						array( 'query' => 'page=gf_edit_forms&view=settings&subview=gravityflow&fid=_notempty_' ),
-						array( 'query' => 'page=gf_edit_forms&view=settings&subview=gravityflow&fid=0' ),
-					),
-				),
-				array(
-					'handle'   => 'gravityflow_generic_map_js',
-					'src'      => $this->get_base_url() . "/js/generic-map{$min}.js",
-					'version'  => $this->_version,
-					'enqueue'  => array(
 						array( 'query' => 'page=gf_edit_forms&view=settings&subview=gravityflow&fid=_notempty_' ),
 						array( 'query' => 'page=gf_edit_forms&view=settings&subview=gravityflow&fid=0' ),
 					),
@@ -1078,71 +1088,77 @@ PRIMARY KEY  (id)
 		 * @return array
 		 */
 		public function get_users_as_choices() {
+			static $choices;
 
-			$role_choices = Gravity_Flow_Common::get_roles_as_choices( true, true );
+			$args = apply_filters( 'gravityflow_get_users_args', array( 'orderby' => array( 'display_name', 'user_login' ), 'fields' => array( 'ID', 'display_name', 'user_login' ) ) );
+			$key  = md5( get_current_blog_id() . '_' . serialize( $args ) );
 
-			$args            = apply_filters( 'gravityflow_get_users_args', array( 'number' => 1000, 'orderby' => 'display_name' ) );
-			$accounts        = get_users( $args );
-			$account_choices = array();
-			foreach ( $accounts as $account ) {
-				$account_choices[] = array( 'value' => 'user_id|' . $account->ID, 'label' => $account->display_name );
-			}
+			if ( ! isset( $choices[ $key ] ) ) {
+				$role_choices = Gravity_Flow_Common::get_roles_as_choices( true, true );
 
-			$choices = array(
-				array(
-					'label'   => __( 'Users', 'gravityflow' ),
-					'choices' => $account_choices,
-				),
-				array(
-					'label'   => __( 'Roles', 'gravityflow' ),
-					'choices' => $role_choices,
-				),
-			);
+				$accounts        = get_users( $args );
+				$account_choices = array();
+				foreach ( $accounts as $account ) {
+					$name = $account->display_name ? $account->display_name : $account->user_login;
+					$account_choices[] = array( 'value' => 'user_id|' . $account->ID, 'label' => $name );
+				}
 
-			$form_id = absint( rgget( 'id' ) );
-
-			$form = GFAPI::get_form( $form_id );
-
-			$field_choices = array();
-
-			$assignee_fields_as_choices = $this->get_assignee_fields_as_choices( $form );
-
-			if ( ! empty( $assignee_fields_as_choices ) ) {
-				$field_choices = $assignee_fields_as_choices;
-			}
-
-			$email_fields_as_choices = $this->get_email_fields_as_choices( $form );
-
-			if ( ! empty( $email_fields_as_choices ) ) {
-				$field_choices = array_merge( $field_choices, $email_fields_as_choices );
-			}
-
-
-			if ( rgar( $form, 'requireLogin' ) ) {
-				$field_choices[] = array(
-					'label' => __( 'User (Created by)', 'gravityflow' ),
-					'value' => 'entry|created_by',
+				$choices[ $key ] = array(
+					array(
+						'label'   => __( 'Users', 'gravityflow' ),
+						'choices' => $account_choices,
+					),
+					array(
+						'label'   => __( 'Roles', 'gravityflow' ),
+						'choices' => $role_choices,
+					),
 				);
+
+				$form_id = absint( rgget( 'id' ) );
+
+				$form = GFAPI::get_form( $form_id );
+
+				$field_choices = array();
+
+				$assignee_fields_as_choices = $this->get_assignee_fields_as_choices( $form );
+
+				if ( ! empty( $assignee_fields_as_choices ) ) {
+					$field_choices = $assignee_fields_as_choices;
+				}
+
+				$email_fields_as_choices = $this->get_email_fields_as_choices( $form );
+
+				if ( ! empty( $email_fields_as_choices ) ) {
+					$field_choices = array_merge( $field_choices, $email_fields_as_choices );
+				}
+
+
+				if ( rgar( $form, 'requireLogin' ) ) {
+					$field_choices[] = array(
+						'label' => __( 'User (Created by)', 'gravityflow' ),
+						'value' => 'entry|created_by',
+					);
+				}
+
+				if ( ! empty( $field_choices ) ) {
+					$choices[ $key ][] = array(
+						'label'   => __( 'Fields', 'gravityflow' ),
+						'choices' => $field_choices,
+					);
+				}
+
+				/**
+				 * Allows the assignee choices to be modified.
+				 *
+				 * @since 2.1
+				 *
+				 * @param array $choices The assignee choices
+				 * @param array $form    The Form
+				 */
+				$choices[ $key ] = apply_filters( 'gravityflow_assignee_choices', $choices[ $key ], $form );
 			}
 
-			if ( ! empty( $field_choices ) ) {
-				$choices[] = array(
-					'label'   => __( 'Fields', 'gravityflow' ),
-					'choices' => $field_choices,
-				);
-			}
-
-			/**
-			 * Allows the assignee choices to be modified.
-			 *
-			 * @since 2.1
-			 *
-			 * @param array $choices The assignee choices
-			 * @param array $form    The Form
-			 */
-			$choices = apply_filters( 'gravityflow_assignee_choices', $choices, $form );
-
-			return $choices;
+			return $choices[ $key ];
 		}
 
 		/**
@@ -3985,7 +4001,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		public function app_settings_fields() {
 			$settings = array();
 
-			if ( ( ! is_multisite() || ( is_multisite() && is_main_site() ) ) && ! defined( 'GRAVITY_FLOW_LICENSE_KEY' ) ) {
+			if ( ! defined( 'GRAVITY_FLOW_LICENSE_KEY' ) ) {
 				$settings[] = array(
 					'title'  => esc_html__( 'Settings', 'gravityflow' ),
 					'fields' => array(
@@ -4017,6 +4033,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 
 			$settings[] = $this->get_app_settings_fields_emails();
 			$settings[] = $this->get_app_settings_fields_pages();
+			$settings[] = $this->get_app_settings_fields_security();
 			$settings[] = $this->get_app_settings_fields_published_forms();
 
 			$settings[] = array(
@@ -4263,6 +4280,39 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		}
 
 		/**
+		 * Returns the Security Settings.
+		 *
+		 * @since 2.5
+		 *
+		 * @return array
+		 */
+		public function get_app_settings_fields_security() {
+			return array(
+				'title'       => esc_html__( 'Security Options', 'gravityflow' ),
+				'fields'      => array(
+					array(
+						'name'  => 'shortcodes',
+						'label' => esc_html__( 'Shortcode Security', 'gravityflow' ),
+						'type'        => 'checkbox',
+						'description' => esc_html__( 'Important: Do not enable any of these settings unless all page authors are authorized.', 'gravityflow' ),
+						'choices'     => array(
+							array(
+								'label'   => esc_html__( 'Allow the Status shortcode to display all entries to all registered users.', 'gravityflow' ),
+								'name'    => 'allow_display_all_attribute',
+								'tooltip' => esc_html__( 'This setting allows the display_all attribute to be used in the shortcode.', 'gravityflow' ),
+							),
+							array(
+								'label'   => esc_html__( 'Allow the Status shortcode to display all entries to all anonymous users.', 'gravityflow' ),
+								'name'    => 'allow_allow_anonymous_attribute',
+								'tooltip' => esc_html__( 'This setting allows the allow_anonymous attribute to be used in the shortcode.', 'gravityflow' ),
+							),
+						),
+					),
+				),
+			);
+		}
+
+		/**
 		 * Display or return the markup for the wp_dropdown_pages field type.
 		 *
 		 * @since 1.4.3-dev
@@ -4396,7 +4446,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				'body'      => array(
 					'edd_action' => $edd_action,
 					'license'    => trim( $license ),
-					'url'        => home_url(),
+					'url'        => network_home_url(),
 				),
 			);
 
@@ -4539,6 +4589,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				'show_header'          => true,
 				'timeline'             => true,
 				'step_highlight'       => true,
+				'context_key'          => 'wp-admin',
 			);
 
 			$args = array_merge( $defaults, $args );
@@ -4716,6 +4767,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		public function status_page( $args = array() ) {
 			$defaults = array(
 				'display_header' => true,
+				'context_key'    => 'wp-admin',
 			);
 			$args = array_merge( $defaults, $args );
 			?>
@@ -5257,14 +5309,37 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		 * @param array       $atts    The shortcode attributes.
 		 * @param null|string $content The shortcode content.
 		 *
-		 * @return string|void
+		 * @return string
 		 */
 		public function shortcode( $atts, $content = null ) {
 
+			if ( get_post()->post_type != 'page' ) {
+				return '';
+			}
+
 			$a = $this->get_shortcode_atts( $atts );
 
+			if ( $a['display_all'] || $a['allow_anonymous'] ) {
+
+				$app_settings = $this->get_app_settings();
+
+				if ( $a['display_all'] && ! rgar( $app_settings, 'allow_display_all_attribute' ) ) {
+
+					$a['display_all'] = false;
+				}
+
+				if ( $a['allow_anonymous'] && ! rgar( $app_settings, 'allow_allow_anonymous_attribute' ) ) {
+
+					$a['allow_anonymous'] = false;
+				}
+
+			}
+
+
+
 			if ( ! $a['allow_anonymous'] && ! is_user_logged_in() ) {
-				if ( ! $this->validate_access_token() ) {
+				$token = $this->decode_access_token();
+				if ( ! $token ) {
 					return;
 				}
 			}
@@ -5272,7 +5347,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 			$entry_id = absint( rgget( 'lid' ) );
 
 			if ( empty( $entry_id ) && ! empty( $a['entry_id'] ) ) {
-					$entry_id = absint( $a['entry_id'] );
+				$entry_id = absint( $a['entry_id'] );
 			}
 
 			if ( ! empty( $a['form'] ) && ! empty( $entry_id ) ) {
@@ -5290,21 +5365,21 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 			}
 
 			switch ( $a['page'] ) {
-				case 'inbox' :
+				case 'inbox':
 					$html .= $this->get_shortcode_inbox_page( $a );
 					break;
-				case 'submit' :
+				case 'submit':
 					ob_start();
 					$this->submit_page( false );
 					$html .= ob_get_clean();
 					break;
-				case 'status' :
+				case 'status':
 					wp_enqueue_script( 'gravityflow_entry_detail' );
 					wp_enqueue_script( 'gravityflow_status_list' );
 
 					if ( rgget( 'view' ) || ! empty( $entry_id ) ) {
 						$html .= $this->get_shortcode_status_page_detail( $a );
-					} else {
+					} elseif ( is_user_logged_in() || ( $a['display_all'] && $a['display_all'] ) ) {
 						$html .= $this->get_shortcode_status_page( $a );
 					}
 			}
@@ -5355,7 +5430,9 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		 *
 		 * @return array
 		 */
+
 		public function get_shortcode_defaults() {
+
 			$defaults = array(
 				'page'             => 'inbox',
 				'form'             => null,
@@ -5376,6 +5453,10 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				'workflow_info'    => true,
 				'sidebar'          => true,
 				'step_highlight'   => true,
+				'back_link'        => false,
+				'back_link_text'   => __( 'Return to list', 'gravityflow' ),
+				'back_link_url'    => null,
+				'context_key'      => '',
 			);
 
 			return $defaults;
@@ -5413,21 +5494,25 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 			wp_enqueue_script( 'gravityflow_entry_detail' );
 			wp_enqueue_script( 'gravityflow_status_list' );
 			$args = array(
-				'form_id'              => $a['form'],
-				'entry_id'             => $a['entry_id'],
-				'id_column'            => $a['id_column'],
-				'submitter_column'     => $a['submitter_column'],
-				'step_column'          => $a['step_column'],
-				'actions_column'       => $a['actions_column'],
-				'show_header'          => false,
-				'field_ids'            => $a['fields'] ? explode( ',', $a['fields'] ) : '',
-				'detail_base_url'      => add_query_arg( array( 'page' => 'gravityflow-inbox', 'view' => 'entry' ) ),
-				'timeline'             => $a['timeline'],
-				'last_updated'         => $a['last_updated'],
-				'step_status'          => $a['step_status'],
-				'workflow_info'        => $a['workflow_info'],
-				'sidebar'              => $a['sidebar'],
-				'step_highlight'       => $a['step_highlight'],
+				'form_id'          => $a['form'],
+				'entry_id'         => $a['entry_id'],
+				'id_column'        => $a['id_column'],
+				'submitter_column' => $a['submitter_column'],
+				'step_column'      => $a['step_column'],
+				'actions_column'   => $a['actions_column'],
+				'show_header'      => false,
+				'field_ids'        => $a['fields'] ? explode( ',', $a['fields'] ) : '',
+				'detail_base_url'  => add_query_arg( array( 'page' => 'gravityflow-inbox', 'view' => 'entry' ) ),
+				'timeline'         => $a['timeline'],
+				'last_updated'     => $a['last_updated'],
+				'step_status'      => $a['step_status'],
+				'workflow_info'    => $a['workflow_info'],
+				'sidebar'          => $a['sidebar'],
+				'step_highlight'   => $a['step_highlight'],
+				'back_link'        => $a['back_link'],
+				'back_link_text'   => $a['back_link_text'],
+				'back_link_url'    => $a['back_link_url'],
+				'context_key'      => $a['context_key'],
 			);
 
 			ob_start();
@@ -5461,6 +5546,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				'sidebar'           => $a['sidebar'],
 				'workflow_info'     => $a['workflow_info'],
 				'step_status'       => $a['step_status'],
+				'context_key'       => $a['context_key'],
 			);
 
 			$this->inbox_page( $args );
@@ -5482,7 +5568,7 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 			ob_start();
 
 			$args = array(
-				'base_url'           => remove_query_arg( array(
+				'base_url'         => remove_query_arg( array(
 					'entry-id',
 					'form-id',
 					'start-date',
@@ -5498,19 +5584,20 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 					'gravityflow-print-page-break',
 					'gravityflow-print-timelines',
 				) ),
-				'detail_base_url'    => add_query_arg( array( 'page' => 'gravityflow-inbox', 'view' => 'entry' ) ),
-				'display_header'     => false,
-				'action_url'         => 'http' . ( isset( $_SERVER['HTTPS'] ) ? 's' : '' ) . '://' . "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}?",
-				'field_ids'          => $a['fields'] ? explode( ',', $a['fields'] ) : '',
-				'display_all'        => $a['display_all'],
-				'id_column'          => $a['id_column'],
-				'submitter_column'   => $a['submitter_column'],
-				'step_column'        => $a['step_column'],
-				'status_column'      => $a['status_column'],
-				'last_updated'       => $a['last_updated'],
-				'step_status'        => $a['step_status'],
-				'workflow_info'      => $a['workflow_info'],
-				'sidebar'            => $a['sidebar'],
+				'detail_base_url'  => add_query_arg( array( 'page' => 'gravityflow-inbox', 'view' => 'entry' ) ),
+				'display_header'   => false,
+				'action_url'       => 'http' . ( isset( $_SERVER['HTTPS'] ) ? 's' : '' ) . '://' . "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}?",
+				'field_ids'        => $a['fields'] ? explode( ',', $a['fields'] ) : '',
+				'display_all'      => $a['display_all'],
+				'id_column'        => $a['id_column'],
+				'submitter_column' => $a['submitter_column'],
+				'step_column'      => $a['step_column'],
+				'status_column'    => $a['status_column'],
+				'last_updated'     => $a['last_updated'],
+				'step_status'      => $a['step_status'],
+				'workflow_info'    => $a['workflow_info'],
+				'sidebar'          => $a['sidebar'],
+				'context_key'      => $a['context_key'],
 			);
 
 			if ( isset( $a['form'] ) ) {
@@ -5839,12 +5926,12 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 
 				if ( isset( $form['feeds']['gravityflow'] ) ) {
 					$this->import_gravityflow_feeds( $form['feeds']['gravityflow'], $form['id'] );
+					$gravityflow_feeds_imported = ! empty( $form['feeds']['gravityflow'] ) ? true : $gravityflow_feeds_imported;
 					unset( $form['feeds']['gravityflow'] );
 					if ( empty( $form['feeds'] ) ) {
 						unset( $form['feeds'] );
 					}
 					GFAPI::update_form( $form );
-					$gravityflow_feeds_imported = true;
 				}
 			}
 
@@ -6358,7 +6445,7 @@ AND m.meta_value='queued'";
 		 *
 		 * @param Gravity_Flow_Assignee $assignee             The current assignee.
 		 * @param array                 $scopes               The access token scopes.
-		 * @param string                $expiration_timestamp The expiration timestamp.
+		 * @param bool|string           $expiration_timestamp The expiration timestamp.
 		 *
 		 * @return string
 		 */
@@ -7195,244 +7282,6 @@ AND m.meta_value='queued'";
 		}
 
 		/**
-		 * Display or return the markup for the generic_map field type.
-		 *
-		 * @param array     $field The field properties.
-		 * @param bool|true $echo  Should the setting markup be echoed.
-		 *
-		 * @return string
-		 */
-		public function settings_generic_map( $field, $echo = true ) {
-
-			$html = '';
-
-			// Support for dynamic field map migrations.
-			if ( isset( $field['field_map'] ) ) {
-				$field['key_choices'] = $field['field_map'];
-			}
-
-			$value_field = $key_field = $custom_key_field = $custom_value_field = $field;
-
-			// Setup key field drop down.
-			$key_field['choices'] = ( isset( $field['key_choices'] ) ) ? $field['key_choices'] : null;
-			$key_field['name']    .= '_key';
-			$key_field['class']   = 'key key_{i}';
-			$key_field['style']   = 'width:200px;';
-
-			// Setup custom key text field.
-			$custom_key_field['name']  .= '_custom_key_{i}';
-			$custom_key_field['class'] = 'custom_key custom_key_{i}';
-			$custom_key_field['value'] = '{custom_key}';
-
-			// Setup value field drop down.
-			$value_field['choices'] = ( isset( $field['value_choices'] ) ) ? $field['value_choices'] : null;
-			$value_field['name']    .= '_custom_value';
-			$value_field['class']   = 'value value_{i}';
-			$value_field['style']   = 'width:200px;';
-
-			// Setup custom value text field.
-			$custom_value_field['name']  .= '_custom_value_{i}';
-			$custom_value_field['class'] = 'custom_value custom_value_{i}';
-			$custom_value_field['value'] = '{custom_value}';
-
-			// Remove unneeded values.
-			$unneeded_values = array( 'field_map', 'key_choices', 'value_choices', 'callback' );
-			foreach ( $unneeded_values as $unneeded_value ) {
-				unset( $field[ $unneeded_value ] );
-				unset( $value_field[ $unneeded_value ] );
-				unset( $key_field[ $unneeded_value ] );
-				unset( $custom_key_field[ $unneeded_value ] );
-				unset( $custom_value_field[ $unneeded_value ] );
-			}
-
-			// Add on errors set when validation fails.
-			if ( $this->field_failed_validation( $field ) ) {
-				$html .= $this->get_error_icon( $field );
-			}
-
-			$html .= $this->get_generic_map_table( $field, $key_field, $custom_key_field, $value_field, $custom_value_field );
-			$html .= $this->settings_hidden( $field, false );
-			$html .= $this->get_generic_map_script( $field, $key_field['name'], $value_field['name'] );
-
-			if ( $echo ) {
-				echo $html;
-			}
-
-			return $html;
-
-		}
-
-		/**
-		 * Return the markup for the table containing the generic_map settings.
-		 *
-		 * @param array $field              The generic_map field properties.
-		 * @param array $key_field          The properties for the key field drop down.
-		 * @param array $custom_key_field   The properties for the key field text input.
-		 * @param array $value_field        The properties for the value field drop down.
-		 * @param array $custom_value_field The properties for the value field text input.
-		 *
-		 * @return string
-		 */
-		public function get_generic_map_table( $field, $key_field, $custom_key_field, $value_field, $custom_value_field ) {
-			$key_field_title   = isset( $field['key_field_title'] ) ? $field['key_field_title'] : esc_html__( 'Key', 'gravityflow' );
-			$value_field_title = isset( $field['value_field_title'] ) ? $field['value_field_title'] : esc_html__( 'Value', 'gravityflow' );
-
-			$html = '
-            <table class="settings-field-map-table" cellspacing="0" cellpadding="0">
-            	<thead>
-					<tr>
-						<th>' . $key_field_title . '</th>
-						<th>' . $value_field_title . '</th>
-					</tr>
-				</thead>
-                <tbody class="repeater">
-	                <tr>
-	                    ' . $this->get_generic_map_field( 'key', $key_field, $custom_key_field ) .
-			        $this->get_generic_map_field( 'value', $value_field, $custom_value_field ) . '
-						<td>
-							{buttons}
-						</td>
-	                </tr>
-                </tbody>
-            </table>';
-
-			return $html;
-		}
-
-		/**
-		 * Return the inline script for the generic_map field.
-		 *
-		 * @param array  $field            The generic_map field properties.
-		 * @param string $key_field_name   The name of the key field.
-		 * @param string $value_field_name The name of the value field.
-		 *
-		 * @return string
-		 */
-		public function get_generic_map_script( $field, $key_field_name, $value_field_name ) {
-			$limit = empty( $field['limit'] ) ? 0 : $field['limit'];
-
-			$html = "
-			<script type=\"text/javascript\">
-
-				var dynamicGenericMap" . esc_attr( $field['name'] ) . " = new GravityFlowGenericMap({
-
-					'baseURL':      '" . GFCommon::get_base_url() . "',
-					'fieldId':      '" . esc_attr( $field['name'] ) . "',
-					'fieldName':    '" . $field['name'] . "',
-					'keyFieldName': '" . $key_field_name . "',
-					'valueFieldName': '" . $value_field_name . "',
-					'limit':        '" . $limit . "'
-
-				});
-
-			</script>";
-
-			return $html;
-		}
-
-		/**
-		 * Prepares the markup for the generic_map key and value fields.
-		 *
-		 * @param string $type         The field type being prepared; key or value.
-		 * @param array  $select_field The drop down field properties.
-		 * @param array  $text_field   The text field properties.
-		 *
-		 * @return string
-		 */
-		public function get_generic_map_field( $type, $select_field, $text_field ) {
-			// Build key cell based on available field map choices.
-			if ( empty( $select_field['choices'] ) ) {
-
-				// Set key field value to "gf_custom" so custom key is used.
-				$select_field['value'] = 'gf_custom';
-
-				/* Build HTML string */
-				$html = sprintf(
-					'<td>%s<div class="custom-%s-container">%s</div></td>',
-					$this->settings_hidden( $select_field, false ),
-					$type,
-					$this->settings_text( $text_field, false )
-				);
-
-			} else {
-
-				// Ensure field map array has a custom key option.
-				$has_gf_custom = false;
-				foreach ( $select_field['choices'] as $choice ) {
-					if ( $this->is_gf_custom_choice( $choice ) ) {
-						$has_gf_custom = true;
-					}
-					if ( rgar( $choice, 'choices' ) ) {
-						foreach ( $choice['choices'] as $sub_choice ) {
-							if ( $this->is_gf_custom_choice( $sub_choice ) ) {
-								$has_gf_custom = true;
-							}
-						}
-					}
-				}
-
-				if ( ! $has_gf_custom ) {
-					$select_field = $this->maybe_add_custom_choice( $select_field, $type );
-				}
-
-				// Build HTML string.
-				$html = sprintf(
-					'<th>%s<div class="custom-%s-container"><a href="#" class="custom-%s-reset">%s</a>%s</div></th>',
-					$this->settings_select( $select_field, false ),
-					$type,
-					$type,
-					esc_html__( 'Reset', 'gravityflow' ),
-					$this->settings_text( $text_field, false )
-				);
-
-			}
-
-			return $html;
-		}
-
-		/**
-		 * Determines if the current choice is the gf_custom choice.
-		 *
-		 * @param array $choice The choice properties.
-		 *
-		 * @return bool
-		 */
-		public function is_gf_custom_choice( $choice ) {
-			if ( 'gf_custom' === rgar( $choice, 'name' ) || rgar( $choice, 'value' ) == 'gf_custom' ) {
-				return true;
-			}
-
-			return false;
-		}
-
-		/**
-		 * Adds the gf_custom choice to the field, if applicable.
-		 *
-		 * @param array  $select_field The drop down field properties.
-		 * @param string $type         The field type being prepared; key or value.
-		 *
-		 * @return array
-		 */
-		public function maybe_add_custom_choice( $select_field, $type ) {
-			if ( $type == 'key' ) {
-				$enable_custom = isset( $select_field['enable_custom_key'] ) ? (bool) $select_field['enable_custom_key'] : ! (bool) rgar( $select_field, 'disable_custom' );
-				$label         = esc_html__( 'Add Custom Key', 'gravityflow' );
-			} else {
-				$enable_custom = isset( $select_field['enable_custom_value'] ) ? (bool) $select_field['enable_custom_value'] : false;
-				$label         = esc_html__( 'Add Custom Value', 'gravityflow' );
-			}
-
-			if ( $enable_custom ) {
-				$select_field['choices'][] = array(
-					'label' => $label,
-					'value' => 'gf_custom'
-				);
-			}
-
-			return $select_field;
-		}
-
-		/**
 		 * Display or return the markup for the feed_condition field type.
 		 *
 		 * @since 1.7.1-dev Added support for logic based on the entry meta.
@@ -8100,6 +7949,9 @@ AND m.meta_value='queued'";
 					$license_key     = defined( 'GRAVITY_FLOW_LICENSE_KEY' ) ? GRAVITY_FLOW_LICENSE_KEY : '';
 					$license_details = $this->check_license( $license_key );
 					if ( $license_details ) {
+						if ( defined( 'GRAVITY_FLOW_LICENSE_KEY' ) && in_array( $license_details->license, array( 'site_inactive', 'inactive' ) ) ) {
+							$license_details = $this->activate_license( GRAVITY_FLOW_LICENSE_KEY );
+						}
 						$expiration = DAY_IN_SECONDS + rand( 0, DAY_IN_SECONDS );
 						set_transient( 'gravityflow_license_details', $license_details, $expiration );
 						update_option( 'gravityflow_last_license_check', time() );
@@ -8111,7 +7963,7 @@ AND m.meta_value='queued'";
 
 			if ( $license_status != 'valid' ) {
 
-				$add_buttons = ! defined( 'GRAVITY_FLOW_LICENSE_KEY' ) || ! is_multisite();
+				$add_buttons = ! is_multisite();
 
 				$primary_button_link = admin_url( 'admin.php?page=gravityflow_settings' );
 
@@ -8143,12 +7995,12 @@ AND m.meta_value='queued'";
 						break;
 				}
 
-				$message .= ' ' . esc_html__( 'This means you&rsquo;re missing out on security fixes, updates and support!', 'gravityflow' );
+				$message .= ' ' . esc_html__( "This means you're missing out on security fixes, updates and support.", 'gravityflow' );
 
 				$url = 'https://gravityflow.io/?utm_source=admin_notice&utm_medium=admin&utm_content=' . $license_status . '&utm_campaign=Admin%20Notice#pricing';
 
 				// Show a different notice on settings page for inactive licenses (hide the buttons)
-				if ( $add_buttons && ! $this->is_app_settings() ) {
+				if ( ! defined( 'GRAVITY_FLOW_LICENSE_KEY' ) && $add_buttons && ! $this->is_app_settings() ) {
 					$message .= '<br /><br />' . esc_html__( '%sActivate your license%s or %sget a license here%s', 'gravityflow' );
 					$message = sprintf( $message, '<a href="' . esc_url( $primary_button_link ) . '" class="button button-primary">', '</a>', '<a href="' . esc_url( $url ) . '" class="button button-secondary">', '</a>' );
 				}
