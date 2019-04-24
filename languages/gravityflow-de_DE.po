@@ -4,6 +4,7 @@
 # Christian Herrmann, 2017-2018
 # D-Jinnz Nathan <djinnz.nathan@googlemail.com>, 2017
 # Florian Göldi, 2015
+# Florian Göldi, 2015
 # FX Bénard <fxb@wp-translations.org>, 2017
 # Sabrina Heuer-Diakow <froschtatze@gmail.com>, 2017
 # Sören Wrede <soerenwrede@gmail.com>, 2017-2018

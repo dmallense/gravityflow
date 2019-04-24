@@ -5,7 +5,7 @@
 # Joan Sierra <ventas@1andweb.com>, 2017
 # Luis Rull <luisrull@gmail.com>, 2017-2018
 # Samuel Aguilera 🚀 <registros@samuelaguilera.com>, 2016
-# Samuel Aguilera 🚀 <registros@samuelaguilera.com>, 2017
+# Samuel Aguilera 🚀 <registros@samuelaguilera.com>, 2016-2017
 # Vincent Mimoun-Prat <vpratfr@yahoo.fr>, 2017
 msgid ""
 msgstr ""

@@ -1,6 +1,8 @@
 # Copyright 2015-2017 Steven Henty.
 # Translators:
 # Munnday <munnday+transifex@gmail.com>, 2016
+# Munnday <munnday+transifex@gmail.com>, 2016
+# Ralf Powierski, 2015
 # Ralf Powierski, 2015
 # Steve Henty, 2015,2017-2018
 msgid ""

@@ -1,6 +1,6 @@
 # Copyright 2015-2017 Steven Henty.
 # Translators:
-# José Antonio Ferreira da Cunha <josefcunha@gmail.com>, 2017
+# José Antonio Ferreira da Cunha <josefcunha@gmail.com>, 2016-2017
 # José Antonio Ferreira da Cunha <josefcunha@gmail.com>, 2016
 msgid ""
 msgstr ""

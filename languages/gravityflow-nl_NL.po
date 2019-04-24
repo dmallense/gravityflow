@@ -3,6 +3,7 @@
 # Erik van Beek <erik@aiwos.nl>, 2015-2017
 # FX Bénard <fxb@wp-translations.org>, 2017
 # Steve Henty, 2015
+# Steve Henty, 2015
 # Thom, 2017-2018
 msgid ""
 msgstr ""
