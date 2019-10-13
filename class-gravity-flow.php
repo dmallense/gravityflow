@@ -1721,7 +1721,8 @@ PRIMARY KEY  (id)
 					'display_fields_mode' => 'all_fields',
 					'destination_complete' => 'next',
 				);
-				$this->insert_feed( $form_id, true, $start_step_meta );
+				$start_step_id = $this->insert_feed( $form_id, true, $start_step_meta );
+				do_action( 'gform_post_save_feed_settings', $start_step_id, $form_id, $start_step_meta, $this );
 
 				$complete_step_meta = array (
 					'step_name' => __( 'Complete', 'gravityflow' ),
@@ -1730,7 +1731,8 @@ PRIMARY KEY  (id)
 					'feed_condition_conditional_logic' => '0',
 					'scheduled' => '0',
 				);
-				$this->insert_feed( $form_id, true, $complete_step_meta );
+				$complete_step_id = $this->insert_feed( $form_id, true, $complete_step_meta );
+				do_action( 'gform_post_save_feed_settings', $complete_step_id, $form_id, $complete_step_meta, $this );
 
 			}
 			return parent::save_feed_settings( $feed_id, $form_id, $settings );
@@ -5782,7 +5784,10 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		}
 
 		/**
-		 * Determines if the current submission requires a PayPal payment and if the workflow should be delayed.
+		 * Determines if workflow processing should be delayed for the current submission.
+		 *
+		 * @since unknown
+		 * @since 2.5.8 Updated to support the delayed payment enhancements in GF 2.4.13.
 		 *
 		 * @param array $entry The entry created from the current form submission.
 		 * @param array $form  The form object used to process the current submission.
@@ -5792,15 +5797,9 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				return;
 			}
 
-			$is_delayed = false;
-
-			if ( class_exists( 'GFPayPal' ) ) {
-				$feed = gf_paypal()->get_single_submission_feed( $entry, $form );
-
-				if ( ! empty( $feed ) && $this->is_delayed( $feed ) && $this->has_paypal_payment( $feed, $form, $entry ) ) {
-					$is_delayed = true;
-				}
-			}
+			// From GF 2.4.13 GFPaymentAddOn uses the gform_is_delayed_pre_process_feed filter located in maybe_delay_feed() to delay processing.
+			// With older GF versions maybe_delay_feed() contains the logic for PayPal Standard.
+			$is_delayed = $this->maybe_delay_feed( $entry, $form );
 
 			/**
 			 * Allow processing of the workflow to be delayed.
@@ -5830,6 +5829,9 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		/**
 		 * Starts the workflow if it was delayed pending PayPal payment.
 		 *
+		 * @since unknown
+		 * @since 2.5.8 Updated to use action_trigger_payment_delayed_feeds().
+		 *
 		 * @param array  $entry          The entry for which the PayPal payment has been completed.
 		 * @param array  $paypal_config  The PayPal feed used to process the entry.
 		 * @param string $transaction_id The PayPal transaction ID.
@@ -5838,10 +5840,30 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 		 * @return void
 		 */
 		public function paypal_fulfillment( $entry, $paypal_config, $transaction_id, $amount ) {
-			if ( empty( $entry['workflow_step'] ) && $this->is_delayed( $paypal_config ) && ! $this->is_entry_view() ) {
-				$form     = GFAPI::get_form( $entry['form_id'] );
+			$this->action_trigger_payment_delayed_feeds( $transaction_id, $paypal_config, $entry );
+		}
+
+		/**
+		 * Starts the workflow if it was delayed pending payment by a GFPaymentAddOn.
+		 *
+		 * @since 2.5.8
+		 *
+		 * @param string     $transaction_id The transaction or subscription ID.
+		 * @param array      $payment_feed   The payment feed which originated the transaction.
+		 * @param array      $entry          The entry currently being processed.
+		 * @param null|array $form           The form currently being processed or null for the legacy PayPal integration.
+		 */
+		public function action_trigger_payment_delayed_feeds( $transaction_id, $payment_feed, $entry, $form = null ) {
+			$this->log_debug( __METHOD__ . '(): Checking fulfillment for transaction ' . $transaction_id . ' for ' . $payment_feed['addon_slug'] );
+
+			if ( empty( $entry['workflow_step'] ) && $this->is_delayed( $payment_feed ) && ! $this->is_entry_view() ) {
+				if ( is_null( $form ) ) {
+					$form = GFFormsModel::get_form_meta( $entry['form_id'] );
+				}
 				$entry_id = absint( $entry['id'] );
 				$this->process_workflow( $form, $entry_id );
+			} else {
+				$this->log_debug( __METHOD__ . '(): Entry ' . $entry['id'] . ' is already fulfilled or workflow is not delayed. No action necessary.' );
 			}
 		}
 
@@ -6613,7 +6635,25 @@ jQuery('#setting-entry-filter-{$name}').gfFilterUI({$filter_settings_json}, {$va
 				}
 			}
 
-			GFFormsModel::add_note( $entry_id, $user_id, $user_name, $note, 'gravityflow' );
+			/**
+			* Allows the timeline note to be customized.
+			*
+			* @since 2.5.7
+			*
+			* @param string                 $note           The message to be added to the timeline.
+			* @param int                    $entry_id       The entry of the current step.
+			* @param bool|int               $user_id        The ID of user performing the action.
+			* @param string                 $user_name      The username of user performing the action.
+			* @param bool|Gravity_Flow_Step $step           If it is a step based action the current step.
+			*
+			* @return bool|string
+			*/
+
+			$note = apply_filters( 'gravityflow_timeline_note_add', $note, $entry_id, $user_id, $user_name, false );
+
+			if ( $note ) {
+				GFFormsModel::add_note( $entry_id, $user_id, $user_name, $note, 'gravityflow' );
+			}
 		}
 
 		/**

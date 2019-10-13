@@ -999,6 +999,7 @@ abstract class Gravity_Flow_Step extends stdClass {
 		$notification['fromName']          = empty( $this->{$from_name} ) ? gravity_flow()->get_app_setting( 'from_name', get_bloginfo( 'name' ) ) : $this->{$from_name};
 		$notification['from']              = empty( $this->{$from_email} ) ? gravity_flow()->get_app_setting( 'from_email', get_bloginfo( 'admin_email' ) ) : $this->{$from_email};
 		$notification['replyTo']           = $this->{$type . 'reply_to'};
+		$notification['cc']                = $this->{$type . 'cc'};
 		$notification['bcc']               = $this->{$type . 'bcc'};
 		$notification['message']           = $this->{$type . 'message'};
 		$notification['disableAutoformat'] = $this->{$type . 'disable_autoformat'};
@@ -1831,7 +1832,9 @@ abstract class Gravity_Flow_Step extends stdClass {
 
 		$this->log_debug( __METHOD__ . '() - sending notification: ' . print_r( $notification, true ) );
 
+		add_filter( 'gform_notification_enable_cc', '__return_true' );
 		GFCommon::send_notification( $notification, $form, $entry );
+		remove_filter( 'gform_notification_enable_cc', '__return_true' );
 	}
 
 	/**
@@ -1964,7 +1967,27 @@ abstract class Gravity_Flow_Step extends stdClass {
 			}
 		}
 
-		GFFormsModel::add_note( $this->get_entry_id(), $user_id, $user_name, $note, 'gravityflow' );
+		$entry_id = $this->get_entry_id();
+
+		/**
+		 * Allows the timeline note to be customized.
+		 *
+		 * @since 2.5.7
+		 *
+		 * @param string                 $note       The message to be added to the timeline.
+		 * @param int                    $entry_id   The entry of the current step.
+		 * @param bool|int               $user_id    The ID of user performing the current step action.
+		 * @param string                 $user_name  The username of user performing the current step action.
+		 * @param bool|Gravity_Flow_Step $step       If it is a step based action the current step.
+		 *
+		 * @return bool|string
+		 */
+
+		$note = apply_filters( 'gravityflow_timeline_note_add', $note, $entry_id, $user_id, $user_name, $this );
+
+		if ( $note ) {
+			GFFormsModel::add_note( $entry_id, $user_id, $user_name, $note, 'gravityflow' );
+		}
 	}
 
 	/**
